@@ -37,7 +37,7 @@ interface TodoistTask {
 }
 
 const GRANOLA_BASE = "https://public-api.granola.ai/v1";
-const TODOIST_BASE = "https://api.todoist.com/rest/v2";
+const TODOIST_BASE = "https://api.todoist.com/api/v1";
 const CLAUDE_MODEL = "claude-sonnet-4-20250514";
 
 async function fetchRecentNotes(apiKey: string, since: string): Promise<GranolaNoteListItem[]> {
@@ -148,7 +148,7 @@ async function createTodoistTask(
 	token: string,
 	item: ActionItem,
 	note: GranolaNoteDetail,
-): Promise<void> {
+): Promise<string> {
 	const body: Record<string, string> = { content: item.title };
 	if (item.due_date) body.due_date = item.due_date;
 
@@ -163,8 +163,7 @@ async function createTodoistTask(
 
 	if (!res.ok) {
 		const errText = await res.text();
-		console.error(`Todoist create task error: ${res.status} — ${errText}`);
-		return;
+		return `ERROR creating task (${res.status}): ${errText}`;
 	}
 
 	const task = (await res.json()) as TodoistTask;
@@ -191,8 +190,11 @@ async function createTodoistTask(
 	});
 
 	if (!commentRes.ok) {
-		console.error(`Todoist comment error for task ${task.id}: ${commentRes.status}`);
+		const errText = await commentRes.text();
+		return `Task created (${task.id}) but comment failed (${commentRes.status}): ${errText}`;
 	}
+
+	return `OK (task ${task.id})`;
 }
 
 interface ProcessOptions {
@@ -275,8 +277,8 @@ async function processNotes(env: Env, opts: ProcessOptions): Promise<string> {
 			if (dryRun) {
 				log(`  [DRY RUN] Would create task: "${item.title}" (due: ${item.due_date || "none"})`);
 			} else {
-				await createTodoistTask(env.TODOIST_API_TOKEN, item, detail);
-				log(`  Created task: "${item.title}"`);
+				const result = await createTodoistTask(env.TODOIST_API_TOKEN, item, detail);
+				log(`  Created task: "${item.title}" — ${result}`);
 			}
 			tasksCreated++;
 		}
