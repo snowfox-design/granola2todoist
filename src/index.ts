@@ -195,7 +195,15 @@ async function createTodoistTask(
 	}
 }
 
-async function processNotes(env: Env, testMode: boolean): Promise<string> {
+interface ProcessOptions {
+	testMode: boolean;
+	titleFilter?: string;
+	createTasks?: boolean; // override: create real tasks even in test mode
+}
+
+async function processNotes(env: Env, opts: ProcessOptions): Promise<string> {
+	const { testMode, titleFilter, createTasks } = opts;
+	const dryRun = testMode && !createTasks;
 	const logs: string[] = [];
 	const log = (msg: string) => {
 		console.log(msg);
@@ -203,7 +211,8 @@ async function processNotes(env: Env, testMode: boolean): Promise<string> {
 	};
 
 	log("=== granola2todoist run started ===");
-	log(`Mode: ${testMode ? "TEST (dry run)" : "LIVE"}`);
+	log(`Mode: ${dryRun ? "TEST (dry run)" : testMode && createTasks ? "TEST (live create)" : "LIVE"}`);
+	if (titleFilter) log(`Filter: title contains "${titleFilter}"`);
 
 	// Test mode: look back 7 days to find something to test with
 	// Live mode: on first run use 24h, subsequent runs use 10 min overlap
@@ -216,16 +225,23 @@ async function processNotes(env: Env, testMode: boolean): Promise<string> {
 
 	log(`Fetching notes since: ${since}`);
 
-	const notes = await fetchRecentNotes(env.GRANOLA_API_KEY, since);
+	let notes = await fetchRecentNotes(env.GRANOLA_API_KEY, since);
 	log(`Fetched ${notes.length} note(s) from Granola`);
+
+	// Apply title filter if specified
+	if (titleFilter) {
+		const filter = titleFilter.toLowerCase();
+		notes = notes.filter((n) => n.title?.toLowerCase().includes(filter));
+		log(`Filtered to ${notes.length} note(s) matching "${titleFilter}"`);
+	}
 
 	let skipped = 0;
 	let processed = 0;
 	let tasksCreated = 0;
 
 	for (const note of notes) {
-		// In test mode, only process the most recent note
-		if (testMode && processed > 0) break;
+		// In test mode without filter, only process the most recent note
+		if (testMode && !titleFilter && processed > 0) break;
 
 		// Check KV (skip in test mode to allow re-runs)
 		if (!testMode) {
@@ -248,7 +264,6 @@ async function processNotes(env: Env, testMode: boolean): Promise<string> {
 		log(`  Found ${items.length} action item(s) for Liam`);
 
 		if (items.length === 0) {
-			// Still mark as processed so we don't re-check
 			if (!testMode) {
 				await env.PROCESSED_MEETINGS.put(note.id, new Date().toISOString());
 			}
@@ -257,7 +272,7 @@ async function processNotes(env: Env, testMode: boolean): Promise<string> {
 		}
 
 		for (const item of items) {
-			if (testMode) {
+			if (dryRun) {
 				log(`  [DRY RUN] Would create task: "${item.title}" (due: ${item.due_date || "none"})`);
 			} else {
 				await createTodoistTask(env.TODOIST_API_TOKEN, item, detail);
@@ -272,7 +287,6 @@ async function processNotes(env: Env, testMode: boolean): Promise<string> {
 		processed++;
 	}
 
-	// Update last run marker
 	if (!testMode) {
 		await env.PROCESSED_MEETINGS.put("__last_run__", new Date().toISOString());
 	}
@@ -283,14 +297,16 @@ async function processNotes(env: Env, testMode: boolean): Promise<string> {
 
 export default {
 	async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-		await processNotes(env, false);
+		await processNotes(env, { testMode: false });
 	},
 
 	async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
 
 		if (url.searchParams.get("test") === "true") {
-			const output = await processNotes(env, true);
+			const titleFilter = url.searchParams.get("title") || undefined;
+			const createTasks = url.searchParams.get("create") === "true";
+			const output = await processNotes(env, { testMode: true, titleFilter, createTasks });
 			return new Response(output, { headers: { "Content-Type": "text/plain" } });
 		}
 
