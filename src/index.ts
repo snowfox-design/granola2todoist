@@ -205,11 +205,14 @@ async function processNotes(env: Env, testMode: boolean): Promise<string> {
 	log("=== granola2todoist run started ===");
 	log(`Mode: ${testMode ? "TEST (dry run)" : "LIVE"}`);
 
-	// Determine lookback window: on first run (no marker in KV), use 24h
+	// Test mode: look back 7 days to find something to test with
+	// Live mode: on first run use 24h, subsequent runs use 10 min overlap
 	const lastRun = await env.PROCESSED_MEETINGS.get("__last_run__");
-	const since = lastRun
-		? new Date(Date.now() - 10 * 60 * 1000).toISOString() // 10 min overlap for safety
-		: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+	const since = testMode
+		? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+		: lastRun
+			? new Date(Date.now() - 10 * 60 * 1000).toISOString()
+			: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
 	log(`Fetching notes since: ${since}`);
 
